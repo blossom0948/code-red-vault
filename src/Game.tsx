@@ -7,6 +7,7 @@ import choiPortrait from './assets/suspect-choi.jpg';
 
 type SuspectId = 'kim' | 'park' | 'choi';
 type EvidenceId = 'receipt' | 'cctv' | 'wax' | 'mac';
+type GamePhase = 'title' | 'prologue' | 'investigation' | 'interrogation';
 type Sender = 'user' | 'suspect' | 'system';
 
 interface Suspect {
@@ -24,6 +25,8 @@ interface Evidence {
   name: string;
   detail: string;
   icon: string;
+  location: string;
+  note: string;
 }
 
 interface Message {
@@ -79,25 +82,33 @@ const EVIDENCE: Evidence[] = [
     id: 'receipt',
     name: '자판기 영수증',
     detail: '21:23 비상계단 커피 결제 내역',
-    icon: '01'
+    icon: '01',
+    location: '비상계단',
+    note: '21:23에 김보안 팀장의 카드로 커피가 결제됐다. 방재실을 비운 시간과 겹친다.'
   },
   {
     id: 'cctv',
     name: 'CCTV 조작 로그',
     detail: '21:20부터 20분간 화면 루프 실행 기록',
-    icon: '02'
+    icon: '02',
+    location: '관제 모니터',
+    note: '정상 화면을 반복 재생하는 루프가 실행됐다. 누군가 실제 복도 영상을 감췄다.'
   },
   {
     id: 'wax',
     name: '바닥 왁스 자국',
     detail: '금고 앞 복도에 남은 광택기 바퀴 흔적',
-    icon: '03'
+    icon: '03',
+    location: '금고 앞 바닥',
+    note: '광택기 바퀴 자국이 금고 문 앞까지 이어진다. 청소 카트가 이 구역을 지나갔다.'
   },
   {
     id: 'mac',
     name: '서버 MAC 로그',
     detail: '21:22 박개발의 맥북에서 원격 접속한 기록',
-    icon: '04'
+    icon: '04',
+    location: '금고 제어 패널',
+    note: '21:22에 박개발의 맥북이 금고 제어 서버에 접속했다. 오프라인 작업 주장과 충돌한다.'
   }
 ];
 
@@ -105,7 +116,7 @@ const INITIAL_MESSAGES: Message[] = [
   {
     id: 'opening-system',
     sender: 'system',
-    text: '특별 심문을 시작합니다. 남은 질문은 15회입니다.',
+    text: '심문 시작. 질문을 보내거나 증거를 선택해 진술을 압박하세요.',
     time: '21:40'
   },
   {
@@ -117,12 +128,39 @@ const INITIAL_MESSAGES: Message[] = [
   }
 ];
 
-function currentTime() {
-  return new Intl.DateTimeFormat('ko-KR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  }).format(new Date());
+const PROLOGUE = [
+  {
+    time: '21:30',
+    chapter: '사건 발생',
+    title: '금고는 열렸고, 경보는 울리지 않았다.',
+    text: '비 내리는 금요일 밤. 하나은행 본점 지하 제1 VIP 금고에서 담보 자산이 사라졌다. 물리 도어락과 디지털 인증 기록은 모두 정상으로 남아 있다.'
+  },
+  {
+    time: '21:20',
+    chapter: '이상 징후',
+    title: 'CCTV에는 같은 20분이 반복된다.',
+    text: '방재실 화면은 평소처럼 복도를 비춘다. 하지만 기록을 넘기자 같은 장면이 되풀이된다. 누군가 침입 시간을 영상에서 지웠다.'
+  },
+  {
+    time: '21:40',
+    chapter: '용의자 확보',
+    title: '그 시간, 보안 구역에 세 사람이 있었다.',
+    text: '보안팀장, 외주 개발자, 야간 미화원. 모두 각자의 알리바이를 댔다. 이제 현장을 직접 조사하고, 거짓말의 주인을 찾아야 한다.'
+  }
+];
+
+const SCENE_SPOTS: Array<{ id: EvidenceId; left: string; top: string; label: string }> = [
+  { id: 'receipt', left: '22%', top: '48%', label: '비상계단' },
+  { id: 'cctv', left: '91%', top: '25%', label: '관제 모니터' },
+  { id: 'wax', left: '58%', top: '78%', label: '바닥 흔적' },
+  { id: 'mac', left: '75%', top: '53%', label: '제어 패널' }
+];
+
+function caseTime(turn: number) {
+  const elapsedMinutes = 40 + turn;
+  const hours = 21 + Math.floor(elapsedMinutes / 60);
+  const minutes = elapsedMinutes % 60;
+  return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
 }
 
 function getLocalReply(suspectId: SuspectId, question: string, evidenceId: EvidenceId | null): LocalReply {
@@ -138,7 +176,7 @@ function getLocalReply(suspectId: SuspectId, question: string, evidenceId: Evide
       text.includes('금고 제어')
     ) {
       return {
-        text: '그 로그가 왜 거기에…! 자동 스케줄러가 한 일입니다. 제가 직접 접속한 게 아니에요. 관리자 권한 기록은 볼 수도 없는데, 어떻게 그걸…',
+        text: '그 기록이 왜 거기에…! 자동 스케줄러가 한 일입니다. 제가 직접 접속한 게 아니에요. 관리자 권한 기록은 볼 수도 없는데, 어떻게 그걸…',
         stress: 58,
         contradiction: true
       };
@@ -227,118 +265,189 @@ function getLocalReply(suspectId: SuspectId, question: string, evidenceId: Evide
   return { text: ordinaryAnswers[suspectId], stress: 5, contradiction: false };
 }
 
-function InitialBriefing({ onStart }: { onStart: () => void }) {
+function TitleScreen({ onStart }: { onStart: () => void }) {
   return (
-    <main className="intro-page">
-      <section
-        className="intro-hero"
-        style={{ backgroundImage: 'linear-gradient(90deg, rgba(6, 10, 13, .96) 0%, rgba(6, 10, 13, .72) 48%, rgba(6, 10, 13, .12) 100%), linear-gradient(0deg, #080d10 0%, transparent 58%), url(' + vaultPrologue + ')' }}
-      >
-        <div className="intro-topline">
-          <div className="brand-lockup">
-            <span className="brand-symbol">CR</span>
-            <span>CODE RED <i>/</i> THE VAULT</span>
-          </div>
-          <span className="case-number">CASE FILE 01 · 기밀</span>
+    <main
+      className="play-screen title-screen"
+      style={{ backgroundImage: 'linear-gradient(90deg, rgba(4, 8, 10, .94), rgba(4, 8, 10, .28)), linear-gradient(0deg, #050809, transparent 70%), url(' + vaultPrologue + ')' }}
+    >
+      <div className="title-topline">
+        <div className="game-logo"><span>CR</span><b>CODE RED <i>/</i> THE VAULT</b></div>
+        <span className="title-version">하나원픽CUP · CASE 01</span>
+      </div>
+      <div className="title-center">
+        <div className="title-alert"><span /> 비상 상황 · 지하 금고 보안 해제</div>
+        <h1>코드 레드</h1>
+        <p className="title-subtitle">하나은행 지하 금고를 열어라</p>
+        <p className="title-description">20분의 공백, 세 명의 용의자.<br />당신의 질문으로 진실을 밝혀라.</p>
+        <button className="arcade-button" type="button" onClick={onStart}>
+          <span className="arcade-play">▶</span> 새 수사 시작 <b>ENTER</b>
+        </button>
+        <div className="title-hint">무료 플레이 · 저장 데이터 없이 바로 시작</div>
+      </div>
+      <div className="title-bottomline">
+        <span>SECURITY INCIDENT / 21:30</span>
+        <span>특별 수사관 대기 중 <i className="blink-dot" /></span>
+      </div>
+    </main>
+  );
+}
+
+function PrologueScreen({
+  index,
+  onPrevious,
+  onNext,
+  onEnterScene
+}: {
+  index: number;
+  onPrevious: () => void;
+  onNext: () => void;
+  onEnterScene: () => void;
+}) {
+  const slide = PROLOGUE[index];
+  return (
+    <main
+      className="play-screen prologue-screen"
+      style={{ backgroundImage: 'linear-gradient(90deg, rgba(4, 8, 10, .94), rgba(4, 8, 10, .48)), linear-gradient(0deg, #050809, transparent 78%), url(' + vaultPrologue + ')' }}
+    >
+      <header className="play-hud">
+        <div className="game-logo"><span>CR</span><b>CASE FILE 01</b></div>
+        <div className="cutscene-progress" aria-label={'브리핑 ' + (index + 1) + ' / ' + PROLOGUE.length}>
+          {PROLOGUE.map((step, stepIndex) => (
+            <span key={step.time} className={stepIndex <= index ? 'progress-lit' : ''} />
+          ))}
         </div>
-        <div className="intro-copy">
-          <span className="eyebrow"><span className="live-dot" /> 하나은행 본점 · 지하 1층</span>
-          <h1>코드 레드:<br /><em>하나은행 지하 금고를 열어라</em></h1>
-          <p className="intro-lede">비는 그쳤지만, CCTV 기록은 멈춰 있었다.</p>
-          <p className="intro-summary">
-            금요일 밤 9시 30분. 경보 한 번 울리지 않은 금고에서 담보 자산이 사라졌다.
-            금고는 물리 키와 디지털 인증을 모두 통과했다. 그 순간 보안 구역 안에 있던 세 사람은
-            서로 다른 이야기를 한다.
-          </p>
-          <div className="intro-tags">
-            <span>심문 추리 어드벤처</span>
-            <span>약 5–10분</span>
-            <span>비용 없이 플레이</span>
+        <span className="hud-phase">작전 브리핑</span>
+      </header>
+      <section className="cutscene-card" key={slide.time}>
+        <div className="cutscene-kicker"><span>{slide.time}</span><i /> {slide.chapter}</div>
+        <h1>{slide.title}</h1>
+        <p>{slide.text}</p>
+        {index === 2 && (
+          <div className="cutscene-cast">
+            {SUSPECT_IDS.map((id) => (
+              <div className="cast-frame" key={id}>
+                <img src={SUSPECTS[id].portrait} alt="" />
+                <span>{SUSPECTS[id].name}</span>
+                <small>{SUSPECTS[id].role}</small>
+              </div>
+            ))}
           </div>
-        </div>
-        <div className="hero-caption"><span>21:30</span> 제1 VIP 금고 · 출입 기록 이상 감지</div>
+        )}
+      </section>
+      <footer className="cutscene-controls">
+        <button type="button" className="cutscene-back" onClick={onPrevious} disabled={index === 0}>← 이전</button>
+        <span>클릭 또는 다음 키로 계속</span>
+        {index < PROLOGUE.length - 1 ? (
+          <button type="button" className="arcade-button compact-button" onClick={onNext}>다음 <b>→</b></button>
+        ) : (
+          <button type="button" className="arcade-button compact-button" onClick={onEnterScene}>현장 조사 시작 <b>→</b></button>
+        )}
+      </footer>
+    </main>
+  );
+}
+
+function InvestigationScreen({
+  foundEvidence,
+  revealedEvidence,
+  onInspect,
+  onCloseEvidence,
+  onEnterInterrogation
+}: {
+  foundEvidence: EvidenceId[];
+  revealedEvidence: EvidenceId | null;
+  onInspect: (id: EvidenceId) => void;
+  onCloseEvidence: () => void;
+  onEnterInterrogation: () => void;
+}) {
+  const revealed = EVIDENCE.find((item) => item.id === revealedEvidence);
+  return (
+    <main
+      className="play-screen investigation-screen"
+      style={{ backgroundImage: 'linear-gradient(180deg, rgba(4, 8, 10, .65), rgba(4, 8, 10, .05) 38%, rgba(4, 8, 10, .52)), url(' + vaultPrologue + ')' }}
+    >
+      <header className="play-hud scene-hud">
+        <div className="game-logo"><span>CR</span><b>FIELD INVESTIGATION</b></div>
+        <div className="scene-hud-center"><span className="live-indicator" /> 지하 1층 · VIP 금고 복도</div>
+        <div className="scene-progress"><b>{String(foundEvidence.length).padStart(2, '0')}</b><span> / 04 단서</span></div>
+      </header>
+
+      <section className="scene-instruction">
+        <span className="eyebrow-game">현장 조사</span>
+        <h1>흔적을 찾아라</h1>
+        <p>빛나는 지점을 눌러 현장 단서를 확보하세요.</p>
       </section>
 
-      <section className="briefing-content">
-        <div className="briefing-heading">
-          <span className="eyebrow">사건 브리핑</span>
-          <h2>20분의 공백, 세 개의 알리바이.</h2>
-          <p>기록을 따라가면, 누군가의 말이 어긋나기 시작한다.</p>
-        </div>
+      <div className="scene-objective"><span>OBJECTIVE</span><b>단서 4개를 수집하고 심문실로 이동</b></div>
 
-        <div className="timeline">
-          <article className="timeline-event">
-            <span className="timeline-time">21:20</span>
-            <div><b>CCTV가 같은 장면을 반복한다</b><p>방재실에는 정상 영상이 재생되지만, 실제 기록은 남지 않았다.</p></div>
-          </article>
-          <article className="timeline-event">
-            <span className="timeline-time">21:22</span>
-            <div><b>금고 제어 서버에 외부 접속 흔적</b><p>오프라인 작업을 했다는 개발자의 기기 정보가 로그에 남았다.</p></div>
-          </article>
-          <article className="timeline-event">
-            <span className="timeline-time">21:30</span>
-            <div><b>자산이 사라지고도 경보는 울리지 않았다</b><p>물리 출입과 인증 기록이 모두 정상처럼 보이도록 조작됐다.</p></div>
-          </article>
-        </div>
+      {SCENE_SPOTS.map((spot) => {
+        const item = EVIDENCE.find((evidence) => evidence.id === spot.id)!;
+        const discovered = foundEvidence.includes(spot.id);
+        return (
+          <button
+            key={spot.id}
+            type="button"
+            className={'scene-hotspot ' + (discovered ? 'hotspot-found' : '')}
+            style={{ left: spot.left, top: spot.top }}
+            aria-label={discovered ? item.name + ' 확인됨. 다시 보기' : spot.label + ' 조사하기'}
+            onClick={() => onInspect(spot.id)}
+          >
+            <span className="hotspot-ring"><b>{discovered ? '✓' : item.icon}</b></span>
+            <span className="hotspot-label">{discovered ? item.name : spot.label}</span>
+          </button>
+        );
+      })}
 
-        <div className="suspects-heading">
-          <div><span className="eyebrow">보안 구역에 있던 사람들</span><h2>세 명의 용의자</h2></div>
-          <span className="suspect-count">용의자 03명</span>
-        </div>
-        <div className="intro-suspects">
-          {SUSPECT_IDS.map((id, index) => {
-            const suspect = SUSPECTS[id];
-            const descriptions: Record<SuspectId, string> = {
-              kim: 'CCTV 관제실을 지킨 보안 책임자',
-              park: '하나인증서 보안 패치를 맡은 개발자',
-              choi: '지하 1층을 청소한 야간 근무자'
-            };
+      <div className="scene-inventory">
+        <div className="inventory-title"><span>수사 가방</span><small>현장 증거</small></div>
+        <div className="inventory-slots">
+          {EVIDENCE.map((item) => {
+            const discovered = foundEvidence.includes(item.id);
             return (
-              <article className="intro-suspect" key={id}>
-                <div className="intro-suspect-image">
-                  <img src={suspect.portrait} alt={suspect.name + ' 용의자 초상'} />
-                  <span>0{index + 1}</span>
-                </div>
-                <div className="intro-suspect-copy">
-                  <span>{suspect.role} · {suspect.age}세</span>
-                  <h3>{suspect.name}</h3>
-                  <p>{descriptions[id]}</p>
-                  <blockquote>“{suspect.alibi}”</blockquote>
-                </div>
-              </article>
+              <div className={'inventory-slot ' + (discovered ? 'slot-filled' : '')} key={item.id}>
+                <span>{discovered ? item.icon : '— —'}</span>
+                <small>{discovered ? item.name : '미확인'}</small>
+              </div>
             );
           })}
         </div>
+        <button
+          type="button"
+          className="arcade-button scene-next-button"
+          onClick={onEnterInterrogation}
+          disabled={foundEvidence.length < EVIDENCE.length}
+        >
+          심문실 입장 <b>{foundEvidence.length < EVIDENCE.length ? foundEvidence.length + '/4' : '→'}</b>
+        </button>
+      </div>
 
-        <div className="mission-card">
-          <div className="mission-copy">
-            <span className="eyebrow">당신의 임무</span>
-            <h2>15번의 질문으로<br />진범과 증거를 밝혀라.</h2>
-            <p>자유롭게 질문하고, 현장 기록을 대조한 뒤 마지막에 한 사람을 기소하세요. 모든 대화는 기기 안에서 실행되는 무료 추리 엔진으로 처리됩니다.</p>
-          </div>
-          <div className="mission-stats">
-            <div><strong>15</strong><span>심문 기회</span></div>
-            <div><strong>04</strong><span>현장 증거</span></div>
-            <div><strong>02</strong><span>엔딩 랭크</span></div>
-          </div>
-          <button className="start-button" type="button" onClick={onStart}>
-            <span>심문실에 입장하기</span><b>→</b>
-          </button>
+      {revealed && (
+        <div className="evidence-reveal" role="presentation">
+          <section className="evidence-reveal-card" role="dialog" aria-modal="true" aria-labelledby="evidence-title">
+            <div className="evidence-stamp"><span>증거 확보</span><b>{revealed.icon}</b></div>
+            <span className="evidence-location">{revealed.location} · CR-01</span>
+            <h2 id="evidence-title">{revealed.name}</h2>
+            <p className="evidence-description">{revealed.detail}</p>
+            <p className="evidence-note">{revealed.note}</p>
+            <button className="arcade-button compact-button" type="button" onClick={onCloseEvidence}>가방에 보관 <b>→</b></button>
+          </section>
         </div>
-
-        <footer className="art-credit">게임 장면과 인물 이미지는 본 프로젝트를 위해 AI로 생성한 콘셉트 아트입니다.</footer>
-      </section>
+      )}
     </main>
   );
 }
 
 export default function CodeRedGame() {
-  const [hasStarted, setHasStarted] = useState(false);
+  const [phase, setPhase] = useState<GamePhase>('title');
+  const [prologueIndex, setPrologueIndex] = useState(0);
+  const [foundEvidence, setFoundEvidence] = useState<EvidenceId[]>([]);
+  const [revealedEvidence, setRevealedEvidence] = useState<EvidenceId | null>(null);
   const [selectedSuspect, setSelectedSuspect] = useState<SuspectId>('park');
   const [heartRates, setHeartRates] = useState<Record<SuspectId, number>>({
-    kim: SUSPECTS.kim.initialBpm,
-    park: SUSPECTS.park.initialBpm,
-    choi: SUSPECTS.choi.initialBpm
+    kim: 78,
+    park: 85,
+    choi: 80
   });
   const [remainingTurns, setRemainingTurns] = useState(15);
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceId | null>(null);
@@ -350,11 +459,11 @@ export default function CodeRedGame() {
   const [accuseEvidence, setAccuseEvidence] = useState<EvidenceId>('mac');
   const [result, setResult] = useState<'win' | 'lose' | null>(null);
   const [resultText, setResultText] = useState('');
-  const chatLogRef = useRef<HTMLDivElement>(null);
+  const dialogueFeedRef = useRef<HTMLDivElement>(null);
   const current = SUSPECTS[selectedSuspect];
 
   useEffect(() => {
-    if (!hasStarted) return undefined;
+    if (phase !== 'interrogation') return undefined;
     const interval = window.setInterval(() => {
       setHeartRates((previous) => {
         const drift = Math.floor(Math.random() * 5) - 2;
@@ -366,16 +475,41 @@ export default function CodeRedGame() {
       });
     }, 2400);
     return () => window.clearInterval(interval);
-  }, [hasStarted]);
+  }, [phase]);
 
   useEffect(() => {
-    const chatLog = chatLogRef.current;
-    if (chatLog) chatLog.scrollTo({ top: chatLog.scrollHeight, behavior: 'smooth' });
+    const feed = dialogueFeedRef.current;
+    if (feed) feed.scrollTo({ top: feed.scrollHeight, behavior: 'smooth' });
   }, [chatLogs, isTyping]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
-  }, [hasStarted]);
+  }, [phase]);
+
+  const beginPrologue = () => {
+    setResult(null);
+    setPrologueIndex(0);
+    setFoundEvidence([]);
+    setRevealedEvidence(null);
+    setSelectedSuspect('park');
+    setHeartRates({ kim: 78, park: 85, choi: 80 });
+    setRemainingTurns(15);
+    setSelectedEvidence(null);
+    setInputText('');
+    setChatLogs(INITIAL_MESSAGES);
+    setShowAccuse(false);
+    setPhase('prologue');
+  };
+
+  const inspectEvidence = (id: EvidenceId) => {
+    setFoundEvidence((previous) => previous.includes(id) ? previous : [...previous, id]);
+    setRevealedEvidence(id);
+  };
+
+  const enterInterrogation = () => {
+    if (foundEvidence.length < EVIDENCE.length) return;
+    setPhase('interrogation');
+  };
 
   const askQuestion = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -385,13 +519,14 @@ export default function CodeRedGame() {
     const askedSuspect = selectedSuspect;
     const attachedEvidence = selectedEvidence;
     const nextTurns = remainingTurns - 1;
+    const dialogueTime = caseTime(16 - remainingTurns);
     const userMessage: Message = {
       id: 'user-' + Date.now(),
       sender: 'user',
       text: (attachedEvidence
         ? '[증거 제시: ' + EVIDENCE.find((item) => item.id === attachedEvidence)?.name + ']\n'
         : '') + question,
-      time: currentTime()
+      time: dialogueTime
     };
     const reply = getLocalReply(askedSuspect, question, attachedEvidence);
 
@@ -400,7 +535,7 @@ export default function CodeRedGame() {
     setChatLogs((messages) => [...messages, userMessage]);
     setIsTyping(true);
     setSelectedEvidence(null);
-    await new Promise((resolve) => window.setTimeout(resolve, 580));
+    await new Promise((resolve) => window.setTimeout(resolve, 540));
     setHeartRates((previous) => ({
       ...previous,
       [askedSuspect]: Math.min(185, previous[askedSuspect] + reply.stress)
@@ -412,21 +547,13 @@ export default function CodeRedGame() {
         sender: 'suspect',
         suspectId: askedSuspect,
         text: reply.text,
-        time: currentTime(),
+        time: dialogueTime,
         contradiction: reply.contradiction,
         stressDelta: reply.stress
       }
     ]);
     setIsTyping(false);
     if (nextTurns === 0) setShowAccuse(true);
-  };
-
-  const startInvestigation = () => {
-    setSelectedSuspect('park');
-    setRemainingTurns(15);
-    setHeartRates({ kim: 78, park: 85, choi: 80 });
-    setChatLogs(INITIAL_MESSAGES);
-    setHasStarted(true);
   };
 
   const submitAccusation = () => {
@@ -444,234 +571,225 @@ export default function CodeRedGame() {
     }
   };
 
-  const resetGame = () => {
+  const leaveCase = () => {
     setResult(null);
     setShowAccuse(false);
-    setHasStarted(false);
-    setSelectedEvidence(null);
-    setInputText('');
+    setPhase('title');
   };
 
-  if (!hasStarted) {
-    return <InitialBriefing onStart={startInvestigation} />;
+  useEffect(() => {
+    const handleGameKeys = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLElement && event.target.closest('button, input, textarea, select')) return;
+
+      if (phase === 'title' && event.key === 'Enter') {
+        beginPrologue();
+        return;
+      }
+
+      if (phase !== 'prologue') return;
+      if (event.key === 'ArrowRight' || event.key === 'Enter') {
+        event.preventDefault();
+        if (prologueIndex < PROLOGUE.length - 1) {
+          setPrologueIndex((index) => index + 1);
+        } else {
+          setPhase('investigation');
+        }
+      } else if (event.key === 'ArrowLeft' && prologueIndex > 0) {
+        event.preventDefault();
+        setPrologueIndex((index) => index - 1);
+      }
+    };
+
+    window.addEventListener('keydown', handleGameKeys);
+    return () => window.removeEventListener('keydown', handleGameKeys);
+  }, [phase, prologueIndex]);
+
+  if (phase === 'title') {
+    return <TitleScreen onStart={beginPrologue} />;
+  }
+
+  if (phase === 'prologue') {
+    return (
+      <PrologueScreen
+        index={prologueIndex}
+        onPrevious={() => setPrologueIndex((index) => Math.max(0, index - 1))}
+        onNext={() => setPrologueIndex((index) => Math.min(PROLOGUE.length - 1, index + 1))}
+        onEnterScene={() => setPhase('investigation')}
+      />
+    );
+  }
+
+  if (phase === 'investigation') {
+    return (
+      <InvestigationScreen
+        foundEvidence={foundEvidence}
+        revealedEvidence={revealedEvidence}
+        onInspect={inspectEvidence}
+        onCloseEvidence={() => setRevealedEvidence(null)}
+        onEnterInterrogation={enterInterrogation}
+      />
+    );
   }
 
   return (
-    <main className="game-page">
-      <div className="game-shell">
-        <header className="game-topbar">
-          <div className="brand-lockup">
-            <span className="brand-symbol">CR</span>
-            <span>CODE RED <i>/</i> THE VAULT</span>
-          </div>
-          <div className="topbar-actions">
-            <div className="turn-counter" aria-label={'남은 질문 ' + remainingTurns + '회'}>
-              <span>남은 질문</span>
-              <strong className={remainingTurns <= 3 ? 'turn-low' : ''}>{remainingTurns}<small> / 15</small></strong>
-            </div>
-            <button className="accuse-button" type="button" onClick={() => setShowAccuse(true)}>
-              최종 기소 <span>→</span>
-            </button>
-          </div>
-        </header>
-
-        <div className="game-section-title">
-          <div>
-            <span className="eyebrow"><span className="live-dot" /> 사건 번호 CR-01 · 특별 심문</span>
-            <h1>금고를 연 사람은 누구인가</h1>
-          </div>
-          <span className="local-badge"><span /> 무료 로컬 엔진</span>
+    <main
+      className="play-screen interrogation-screen"
+      style={{ backgroundImage: 'linear-gradient(90deg, rgba(5, 9, 11, .90), rgba(5, 9, 11, .74)), url(' + vaultPrologue + ')' }}
+    >
+      <header className="play-hud interrogation-hud">
+        <button className="return-scene" type="button" onClick={() => setPhase('investigation')}>← 현장</button>
+        <div className="game-logo"><span>CR</span><b>심문실 · CASE 01</b></div>
+        <div className="interrogation-hud-actions">
+          <div className="turn-meter"><span>남은 질문</span><b className={remainingTurns <= 3 ? 'turn-critical' : ''}>{remainingTurns}<small> / 15</small></b></div>
+          <button className="accuse-game-button" type="button" onClick={() => setShowAccuse(true)}>기소 <b>→</b></button>
         </div>
+      </header>
 
-        <div className="investigation-layout">
-          <aside className="case-panel">
-            <div className="panel-heading">
-              <div><span className="eyebrow">조사 대상</span><h2>용의자</h2></div>
-              <span className="panel-count">03</span>
-            </div>
-            <div className="suspect-switcher">
-              {SUSPECT_IDS.map((id) => {
-                const suspect = SUSPECTS[id];
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    aria-pressed={selectedSuspect === id}
-                    className={'suspect-switch ' + (selectedSuspect === id ? 'is-active' : '')}
-                    onClick={() => setSelectedSuspect(id)}
-                    disabled={isTyping}
-                  >
-                    <img src={suspect.portrait} alt="" />
-                    <span>{suspect.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="suspect-focus">
-              <div className="suspect-photo">
-                <img src={current.portrait} alt={current.name + ' 초상'} />
-                <span className="photo-index">SUBJECT / 0{SUSPECT_IDS.indexOf(selectedSuspect) + 1}</span>
-              </div>
-              <div className="suspect-profile">
-                <div>
-                  <h3>{current.name}</h3>
-                  <p>{current.role} · {current.age}세</p>
-                </div>
-                <div className={'bpm-readout ' + (heartRates[selectedSuspect] >= 130 ? 'bpm-alert' : '')}>
-                  <span>심박</span><strong>{heartRates[selectedSuspect]}</strong><small>bpm</small>
-                </div>
-              </div>
-              <div className="alibi-card">
-                <span>진술한 알리바이</span>
-                <p>“{current.alibi}”</p>
+      <section className="interrogation-stage">
+        <aside className="suspect-stage">
+          <div className="subject-image-frame">
+            <img className="subject-image" src={current.portrait} alt={current.name + ' 초상'} />
+            <span className="subject-classification">SUBJECT / 0{SUSPECT_IDS.indexOf(selectedSuspect) + 1}</span>
+            <span className={'subject-alert ' + (heartRates[selectedSuspect] >= 130 ? 'alert-red' : '')}>
+              <i /> {heartRates[selectedSuspect] >= 130 ? '긴장 고조' : '심문 중'}
+            </span>
+          </div>
+          <div className="suspect-status-panel">
+            <div className="suspect-nameplate">
+              <div><span>{current.role} · {current.age}세</span><h1>{current.name}</h1></div>
+              <div className={'heartbeat-number ' + (heartRates[selectedSuspect] >= 130 ? 'heartbeat-red' : '')}>
+                <span>HEART RATE</span><b>{heartRates[selectedSuspect]}</b><small>bpm</small>
               </div>
             </div>
+            <div className="heartbeat-track"><span style={{ width: Math.min(100, Math.max(3, ((heartRates[selectedSuspect] - 70) / 115) * 100)) + '%' }} /></div>
+            <div className="alibi-caption"><span>알리바이</span><p>“{current.alibi}”</p></div>
+          </div>
+          <div className="suspect-selector" aria-label="심문 대상 선택">
+            {SUSPECT_IDS.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={'suspect-select-button ' + (selectedSuspect === id ? 'suspect-select-active' : '')}
+                aria-pressed={selectedSuspect === id}
+                onClick={() => setSelectedSuspect(id)}
+                disabled={isTyping}
+              >
+                <img src={SUSPECTS[id].portrait} alt="" />
+                <span>{SUSPECTS[id].name}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
 
-            <details className="evidence-drawer">
-              <summary><span>현장 증거</span><b>04</b><i>펼치기</i></summary>
-              <div className="evidence-list">
-                {EVIDENCE.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={'evidence-item ' + (selectedEvidence === item.id ? 'evidence-selected' : '')}
-                    aria-pressed={selectedEvidence === item.id}
-                    onClick={() => setSelectedEvidence(selectedEvidence === item.id ? null : item.id)}
-                    disabled={isTyping}
-                  >
-                    <span className="evidence-number">{item.icon}</span>
-                    <span><b>{item.name}</b><small>{item.detail}</small></span>
-                    <i>{selectedEvidence === item.id ? '선택' : '+'}</i>
-                  </button>
-                ))}
-                <p className="evidence-hint">증거를 선택한 뒤 질문을 보내면 대화에 함께 제시됩니다.</p>
-              </div>
-            </details>
-          </aside>
-
-          <section className="interrogation-panel" aria-label="심문 대화">
-            <div className="interrogation-header">
-              <div className="conversation-person">
-                <img src={current.portrait} alt="" />
-                <div><span>심문 기록</span><strong>{current.name}과 대화 중</strong></div>
-              </div>
-              <div className="recording-indicator"><span /> REC</div>
-            </div>
-            <div className="chat-log" aria-live="polite" ref={chatLogRef}>
-              <div className="chat-date"><span>금요일 · 21:40</span></div>
-              {chatLogs.map((message) => {
-                if (message.sender === 'system') {
-                  return <div className="system-message" key={message.id}><span>{message.text}</span></div>;
-                }
-                const isUser = message.sender === 'user';
-                const person = SUSPECTS[message.suspectId || selectedSuspect];
-                return (
-                  <article className={'chat-row ' + (isUser ? 'chat-row-user' : '')} key={message.id}>
-                    {!isUser && <img className="chat-avatar" src={person.portrait} alt="" />}
-                    <div className="chat-message-wrap">
-                      {!isUser && <span className="chat-name">{person.name}</span>}
-                      <div className={'chat-bubble ' + (isUser ? 'bubble-user' : '') + (message.contradiction ? ' bubble-contradiction' : '')}>
-                        <p>{message.text}</p>
-                        {message.contradiction && <div className="contradiction-note">진술의 모순 · 심박 +{message.stressDelta} bpm</div>}
-                      </div>
-                      <time>{message.time}</time>
+        <section className="dialogue-panel" aria-label="심문 대화">
+          <header className="dialogue-topline">
+            <div><span className="eyebrow-game">증거를 대조해 진술을 흔들어라</span><b>{current.name}과 대화 중</b></div>
+            <span className="recording-dot"><i /> REC</span>
+          </header>
+          <div className="dialogue-feed" aria-live="polite" ref={dialogueFeedRef}>
+            <div className="dialogue-time">금요일 · 21:40</div>
+            {chatLogs.map((message) => {
+              if (message.sender === 'system') {
+                return <div className="game-system-line" key={message.id}><span>{message.text}</span></div>;
+              }
+              const isUser = message.sender === 'user';
+              const person = SUSPECTS[message.suspectId || selectedSuspect];
+              return (
+                <article className={'game-dialogue-row ' + (isUser ? 'player-row' : '')} key={message.id}>
+                  {!isUser && <img className="dialogue-portrait" src={person.portrait} alt="" />}
+                  <div className="game-dialogue-copy">
+                    {!isUser && <span className="speaker-name">{person.name}</span>}
+                    <div className={'game-speech ' + (isUser ? 'player-speech' : '') + (message.contradiction ? ' contradiction-speech' : '')}>
+                      <p>{message.text}</p>
+                      {message.contradiction && <div className="contradiction-tag">진술 모순 · 심박 +{message.stressDelta} bpm</div>}
                     </div>
-                  </article>
-                );
-              })}
-              {isTyping && (
-                <article className="chat-row">
-                  <img className="chat-avatar" src={current.portrait} alt="" />
-                  <div className="chat-message-wrap">
-                    <span className="chat-name">{current.name}</span>
-                    <div className="chat-bubble typing-indicator"><span /><span /><span /></div>
+                    <time>{message.time}</time>
                   </div>
                 </article>
-              )}
-            </div>
-
-            <div className="composer-area">
-              {selectedEvidence && (
-                <div className="attached-evidence">
-                  <span>증거 첨부</span>
-                  <b>{EVIDENCE.find((item) => item.id === selectedEvidence)?.name}</b>
-                  <button type="button" onClick={() => setSelectedEvidence(null)} aria-label="첨부 증거 해제">×</button>
-                </div>
-              )}
-              <form className="question-form" onSubmit={askQuestion}>
-                <input
-                  value={inputText}
-                  onChange={(event) => setInputText(event.target.value)}
-                  placeholder={current.name + '에게 자유롭게 질문하세요'}
-                  aria-label="심문 질문"
-                  disabled={remainingTurns <= 0 || isTyping}
-                  maxLength={220}
-                />
-                <button type="submit" disabled={!inputText.trim() || remainingTurns <= 0 || isTyping}>
-                  보내기 <span>↑</span>
-                </button>
-              </form>
-              <div className="composer-footnote">
-                <span>사건과 관련된 질문을 직접 입력하세요.</span>
-                <span>{remainingTurns}회 남음</span>
-              </div>
-            </div>
-          </section>
-        </div>
-        <footer className="game-footer"><span>CODE RED / 특별 수사 기록</span><button type="button" onClick={resetGame}>사건 브리핑으로 돌아가기</button></footer>
-      </div>
-
-      {showAccuse && (
-        <div className="modal-backdrop" role="presentation">
-          <section className="game-modal" role="dialog" aria-modal="true" aria-labelledby="accuse-title">
-            <div className="modal-heading">
-              <div><span className="eyebrow">사건 종결 절차</span><h2 id="accuse-title">최종 기소</h2></div>
-              <button className="modal-close" type="button" onClick={() => setShowAccuse(false)} aria-label="닫기">×</button>
-            </div>
-            <p className="modal-intro">진범이라고 생각하는 사람과 법원에 제출할 증거를 선택하세요.</p>
-            <label className="modal-label">기소할 용의자</label>
-            <div className="accuse-suspects">
-              {SUSPECT_IDS.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={accuseSuspect === id ? 'accuse-suspect picked' : 'accuse-suspect'}
-                  onClick={() => setAccuseSuspect(id)}
-                >
-                  <img src={SUSPECTS[id].portrait} alt="" /><span>{SUSPECTS[id].name}</span>
-                </button>
-              ))}
-            </div>
-            <label className="modal-label">제출할 결정적 증거</label>
-            <div className="accuse-evidence">
+              );
+            })}
+            {isTyping && (
+              <article className="game-dialogue-row">
+                <img className="dialogue-portrait" src={current.portrait} alt="" />
+                <div className="game-dialogue-copy"><span className="speaker-name">{current.name}</span><div className="game-speech typing-speech"><i /><i /><i /></div></div>
+              </article>
+            )}
+          </div>
+          <div className="dialogue-controls">
+            <div className="evidence-selector-title"><span>수사 가방</span><small>증거를 선택해 제시</small></div>
+            <div className="evidence-selector">
               {EVIDENCE.map((item) => (
                 <button
                   key={item.id}
                   type="button"
-                  className={accuseEvidence === item.id ? 'accuse-evidence-item picked' : 'accuse-evidence-item'}
-                  onClick={() => setAccuseEvidence(item.id)}
+                  className={'evidence-chip ' + (selectedEvidence === item.id ? 'evidence-chip-active' : '')}
+                  aria-pressed={selectedEvidence === item.id}
+                  onClick={() => setSelectedEvidence(selectedEvidence === item.id ? null : item.id)}
+                  disabled={isTyping}
                 >
-                  <span>{item.icon}</span><b>{item.name}</b><i>{accuseEvidence === item.id ? '선택됨' : '선택'}</i>
+                  <span>{item.icon}</span>{item.name}
                 </button>
               ))}
             </div>
-            <div className="modal-actions">
-              <button type="button" className="secondary-button" onClick={() => setShowAccuse(false)}>심문 계속</button>
-              <button type="button" className="danger-button" onClick={submitAccusation}>기소 확정 <span>→</span></button>
+            {selectedEvidence && (
+              <div className="evidence-attached">
+                <span>제시할 증거</span><b>{EVIDENCE.find((item) => item.id === selectedEvidence)?.name}</b>
+                <button type="button" aria-label="증거 해제" onClick={() => setSelectedEvidence(null)}>×</button>
+              </div>
+            )}
+            <form className="question-console" onSubmit={askQuestion}>
+              <input
+                value={inputText}
+                onChange={(event) => setInputText(event.target.value)}
+                placeholder={current.name + '에게 자유롭게 질문하세요'}
+                aria-label="심문 질문"
+                disabled={remainingTurns <= 0 || isTyping}
+                maxLength={220}
+              />
+              <button type="submit" disabled={!inputText.trim() || remainingTurns <= 0 || isTyping}>질문 <b>↑</b></button>
+            </form>
+            <div className="question-help"><span>자유 입력 · 질문마다 심문 기회 1회 사용</span><span>{remainingTurns}회 남음</span></div>
+          </div>
+        </section>
+      </section>
+
+      <footer className="play-footer"><span>FIELD EVIDENCE {String(foundEvidence.length).padStart(2, '0')} / 04 · 무료 로컬 엔진</span><button type="button" onClick={leaveCase}>수사 종료</button></footer>
+
+      {showAccuse && (
+        <div className="game-overlay" role="presentation">
+          <section className="case-modal" role="dialog" aria-modal="true" aria-labelledby="accuse-title">
+            <div className="modal-hud"><span>CASE CLOSURE</span><button type="button" onClick={() => setShowAccuse(false)} aria-label="닫기">×</button></div>
+            <h2 id="accuse-title">최종 기소</h2>
+            <p>진범과 법원에 제출할 결정적 증거를 정하세요.</p>
+            <span className="modal-field-label">용의자 지목</span>
+            <div className="accuse-targets">
+              {SUSPECT_IDS.map((id) => (
+                <button key={id} type="button" className={accuseSuspect === id ? 'accuse-target target-active' : 'accuse-target'} onClick={() => setAccuseSuspect(id)}>
+                  <img src={SUSPECTS[id].portrait} alt="" /><span>{SUSPECTS[id].name}</span>
+                </button>
+              ))}
             </div>
+            <span className="modal-field-label">결정적 증거</span>
+            <div className="accuse-evidence-list">
+              {EVIDENCE.map((item) => (
+                <button key={item.id} type="button" className={accuseEvidence === item.id ? 'accuse-evidence target-active' : 'accuse-evidence'} onClick={() => setAccuseEvidence(item.id)}>
+                  <span>{item.icon}</span><b>{item.name}</b><i>{accuseEvidence === item.id ? 'SELECTED' : 'CHOOSE'}</i>
+                </button>
+              ))}
+            </div>
+            <div className="modal-buttons"><button type="button" className="modal-secondary" onClick={() => setShowAccuse(false)}>심문 계속</button><button type="button" className="modal-confirm" onClick={submitAccusation}>기소 확정 →</button></div>
           </section>
         </div>
       )}
 
       {result && (
-        <div className="modal-backdrop result-backdrop" role="presentation">
-          <section className="game-modal result-modal" role="dialog" aria-modal="true" aria-labelledby="result-title">
-            <div className={'result-mark ' + (result === 'win' ? 'result-win' : '')}>{result === 'win' ? '✓' : '!'}</div>
-            <span className="eyebrow">{result === 'win' ? 'CASE CLOSED · S RANK' : 'CASE UNRESOLVED · F RANK'}</span>
+        <div className="game-overlay result-overlay" role="presentation">
+          <section className="case-modal result-case-modal" role="dialog" aria-modal="true" aria-labelledby="result-title">
+            <span className="result-overline">{result === 'win' ? 'CASE CLOSED · S RANK' : 'CASE UNRESOLVED · F RANK'}</span>
+            <div className={'result-emblem ' + (result === 'win' ? 'result-emblem-win' : '')}>{result === 'win' ? '✓' : '!'}</div>
             <h2 id="result-title">{result === 'win' ? '완벽한 검거' : '기소 실패'}</h2>
-            <p className="result-copy">{resultText}</p>
-            <button className="start-button result-restart" type="button" onClick={resetGame}><span>사건 브리핑부터 다시하기</span><b>↻</b></button>
+            <p>{resultText}</p>
+            <button className="arcade-button modal-restart" type="button" onClick={beginPrologue}>다시 수사하기 <b>↻</b></button>
           </section>
         </div>
       )}
