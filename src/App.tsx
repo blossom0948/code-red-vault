@@ -1,10 +1,14 @@
 // CodeRedGame.tsx
 import React, { useState, useEffect, useRef } from 'react';
+import {
+  checkLlmConnection,
+  getDefaultLlmEndpoint,
+  streamInterrogation,
+  type EvidenceId,
+  type SuspectId
+} from './lib/llm';
 
 // --- 데이터 타입 정의 ---
-type SuspectId = 'kim' | 'park' | 'choi';
-type EvidenceId = 'receipt' | 'cctv' | 'wax' | 'mac';
-
 interface Suspect {
   id: SuspectId;
   name: string;
@@ -108,6 +112,115 @@ const QUICK_QUESTIONS: Record<SuspectId, string[]> = {
   ]
 };
 
+interface DeterministicResponse {
+  text: string;
+  stressDelta: number;
+  isContradiction: boolean;
+}
+
+function getDeterministicResponse(suspectId: SuspectId, question: string, evidenceId: EvidenceId | null): DeterministicResponse {
+  const lower = question.toLowerCase();
+
+  if (suspectId === 'park') {
+    if (
+      evidenceId === 'mac' ||
+      lower.includes('mac') ||
+      lower.includes('인터넷') ||
+      lower.includes('접속') ||
+      lower.includes('로그')
+    ) {
+      return {
+        text: '네?! 그, 그게 왜... 아, 아니, 그건 자동 스케줄러가 백그라운드에서 실행된 거지 제가 직접 한 게 아닙니다! 관리자 권한 로그는 저도 못 보는데 어떻게...?!',
+        stressDelta: 50,
+        isContradiction: true
+      };
+    }
+    if (evidenceId === 'cctv' || lower.includes('cctv') || lower.includes('루프')) {
+      return {
+        text: 'CCTV 루프요...? 방재실 보안 쪽 문제 아닌가요? 저는 3층 전산실에만 있었는데 왜 저한테 그런 걸 물으시나요...',
+        stressDelta: 25,
+        isContradiction: false
+      };
+    }
+    return {
+      text: '저는 하나은행 보안 프로토콜 규정을 엄격히 준수했습니다. 수사관님, 시간 낭비하지 마시고 방재실이나 확인해 보세요.',
+      stressDelta: 5,
+      isContradiction: false
+    };
+  }
+
+  if (suspectId === 'kim') {
+    if (
+      evidenceId === 'receipt' ||
+      lower.includes('자판기') ||
+      lower.includes('영수증') ||
+      lower.includes('커피') ||
+      lower.includes('비상계단')
+    ) {
+      return {
+        text: '큭...! 수, 수사관님 제발 그것만은 봐주십시오. 사채업자 놈들이 전화로 협박해서 잠깐 비상계단에서 통화한 겁니다. 금고에는 손도 안 댔습니다!',
+        stressDelta: 55,
+        isContradiction: true
+      };
+    }
+    if (lower.includes('방재실') || lower.includes('순찰')) {
+      return {
+        text: '당직 근무 규정대로 1시간마다 모니터를 육안 체크했습니다. 제 장부에도 기록되어 있습니다!',
+        stressDelta: 10,
+        isContradiction: false
+      };
+    }
+    return {
+      text: '20년 동안 하나은행 보안을 지켜왔습니다. 저를 모욕하지 마십시오.',
+      stressDelta: 5,
+      isContradiction: false
+    };
+  }
+
+  if (
+    evidenceId === 'wax' ||
+    lower.includes('왁스') ||
+    lower.includes('바닥') ||
+    lower.includes('카트')
+  ) {
+    return {
+      text: '아이고 수사관님... 제가 바닥에 반짝이는 카드(VIP 마스터키)가 떨어져 있길래 잠깐 주워서 주머니에 넣었던 건 맞는데요... 금고 문은 어떻게 여는지도 모릅니다요!',
+      stressDelta: 45,
+      isContradiction: true
+    };
+  }
+  if (lower.includes('마스터키') || lower.includes('카드')) {
+    return {
+      text: '카, 카드라니요? 저는 빗자루질밖에 안 했습니다...',
+      stressDelta: 30,
+      isContradiction: true
+    };
+  }
+  return {
+    text: '나이 먹고 청소하는 사람이라고 무시하시는 겁니까? 저는 시간 맞춰 휴게실에 들어갔어요.',
+    stressDelta: 5,
+    isContradiction: false
+  };
+}
+
+type ApiCheckStatus = 'idle' | 'checking' | 'connected' | 'error';
+
+function getSavedLlmEndpoint() {
+  try {
+    return window.localStorage.getItem('code-red-llm-endpoint') || getDefaultLlmEndpoint();
+  } catch {
+    return getDefaultLlmEndpoint();
+  }
+}
+
+function getSavedAiMode() {
+  try {
+    return window.localStorage.getItem('code-red-ai-mode') === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export default function CodeRedGame() {
   // --- 상태 관리 ---
   const [selectedSuspect, setSelectedSuspect] = useState<SuspectId>('park');
@@ -132,6 +245,13 @@ export default function CodeRedGame() {
     }
   ]);
   const [isTyping, setIsTyping] = useState<boolean>(false);
+  const [typingSuspectId, setTypingSuspectId] = useState<SuspectId | null>(null);
+  const [streamingReply, setStreamingReply] = useState('');
+  const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
+  const [apiEndpoint, setApiEndpoint] = useState(getSavedLlmEndpoint);
+  const [isAiMode, setIsAiMode] = useState(getSavedAiMode);
+  const [apiCheckStatus, setApiCheckStatus] = useState<ApiCheckStatus>('idle');
+  const [apiCheckMessage, setApiCheckMessage] = useState('연결 상태를 확인해 주세요.');
 
   // 모달 상태
   const [isAccuseModalOpen, setIsAccuseModalOpen] = useState<boolean>(false);
@@ -149,7 +269,7 @@ export default function CodeRedGame() {
   // 대화창 자동 스크롤
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatLogs, isTyping]);
+  }, [chatLogs, isTyping, streamingReply]);
 
   // EKG 심박수 주기적 미세 변화
   useEffect(() => {
@@ -172,9 +292,11 @@ export default function CodeRedGame() {
   };
 
   // 질문 전송 처리
-  const handleAskQuestion = (questionText: string, evidenceUsed: EvidenceId | null = null) => {
+  const handleAskQuestion = async (questionText: string, evidenceUsed: EvidenceId | null = null) => {
     if (!questionText.trim() || remainingTurns <= 0 || isTyping) return;
 
+    const suspectIdAtSend = selectedSuspect;
+    const heartRateAtSend = heartRates[suspectIdAtSend];
     const newTurn = remainingTurns - 1;
     setRemainingTurns(newTurn);
     setInputText('');
@@ -190,98 +312,99 @@ export default function CodeRedGame() {
 
     setChatLogs((prev) => [...prev, userMsg]);
     setIsTyping(true);
+    setTypingSuspectId(suspectIdAtSend);
+    setStreamingReply('');
 
-    // AI 모순 감지 및 심박수 반응
-    setTimeout(() => {
-      let replyText = '';
-      let stressIncrease = 5;
-      let isContradiction = false;
-      const lower = questionText.toLowerCase();
+    const localResponse = getDeterministicResponse(suspectIdAtSend, questionText, evidenceUsed);
+    let replyText = localResponse.text;
+    let fallbackNotice: ChatMessage | null = null;
 
-      if (selectedSuspect === 'park') {
-        if (
-          evidenceUsed === 'mac' ||
-          lower.includes('mac') ||
-          lower.includes('인터넷') ||
-          lower.includes('접속') ||
-          lower.includes('로그')
-        ) {
-          replyText =
-            '네?! 그, 그게 왜... 아, 아니, 그건 자동 스케줄러가 백그라운드에서 실행된 거지 제가 직접 한 게 아닙니다! 관리자 권한 로그는 저도 못 보는데 어떻게...?!';
-          stressIncrease = 50;
-          isContradiction = true;
-        } else if (evidenceUsed === 'cctv' || lower.includes('cctv') || lower.includes('루프')) {
-          replyText =
-            'CCTV 루프요...? 방재실 보안 쪽 문제 아닌가요? 저는 3층 전산실에만 있었는데 왜 저한테 그런 걸 물으시나요...';
-          stressIncrease = 25;
-        } else {
-          replyText =
-            '저는 하나은행 보안 프로토콜 규정을 엄격히 준수했습니다. 수사관님, 시간 낭비하지 마시고 방재실이나 확인해 보세요.';
-          stressIncrease = 5;
-        }
-      } else if (selectedSuspect === 'kim') {
-        if (
-          evidenceUsed === 'receipt' ||
-          lower.includes('자판기') ||
-          lower.includes('영수증') ||
-          lower.includes('커피') ||
-          lower.includes('비상계단')
-        ) {
-          replyText =
-            '큭...! 수, 수사관님 제발 그것만은 봐주십시오. 사채업자 놈들이 전화로 협박해서 잠깐 비상계단에서 통화한 겁니다. 금고에는 손도 안 댔습니다!';
-          stressIncrease = 55;
-          isContradiction = true;
-        } else if (lower.includes('방재실') || lower.includes('순찰')) {
-          replyText = '당직 근무 규정대로 1시간마다 모니터를 육안 체크했습니다. 제 장부에도 기록되어 있습니다!';
-          stressIncrease = 10;
-        } else {
-          replyText = '20년 동안 하나은행 보안을 지켜왔습니다. 저를 모욕하지 마십시오.';
-          stressIncrease = 5;
-        }
-      } else if (selectedSuspect === 'choi') {
-        if (
-          evidenceUsed === 'wax' ||
-          lower.includes('왁스') ||
-          lower.includes('바닥') ||
-          lower.includes('카트')
-        ) {
-          replyText =
-            '아이고 수사관님... 제가 바닥에 반짝이는 카드(VIP 마스터키)가 떨어져 있길래 잠깐 주워서 주머니에 넣었던 건 맞는데요... 금고 문은 어떻게 여는지도 모릅니다요!';
-          stressIncrease = 45;
-          isContradiction = true;
-        } else if (lower.includes('마스터키') || lower.includes('카드')) {
-          replyText = '카, 카드라니요? 저는 빗자루질밖에 안 했습니다...';
-          stressIncrease = 30;
-          isContradiction = true;
-        } else {
-          replyText = '나이 먹고 청소하는 사람이라고 무시하시는 겁니까? 저는 시간 맞춰 휴게실에 들어갔어요.';
-          stressIncrease = 5;
-        }
+    try {
+      if (isAiMode) {
+        const history = chatLogs
+          .filter((message) => message.sender !== 'system' && (message.sender === 'user' || message.suspectId === suspectIdAtSend))
+          .slice(-8)
+          .map((message) => ({
+            role: message.sender === 'user' ? 'user' as const : 'assistant' as const,
+            content: message.text
+          }));
+
+        replyText = await streamInterrogation(
+          apiEndpoint,
+          {
+            suspectId: suspectIdAtSend,
+            question: questionText,
+            evidenceId: evidenceUsed,
+            heartRate: heartRateAtSend,
+            history
+          },
+          setStreamingReply
+        );
+        setApiCheckStatus('connected');
+        setApiCheckMessage('AI 서버에 연결되었습니다.');
+      } else {
+        await new Promise((resolve) => window.setTimeout(resolve, 600));
       }
-
-      setHeartRates((prev) => ({
-        ...prev,
-        [selectedSuspect]: Math.min(185, prev[selectedSuspect] + stressIncrease)
-      }));
-
-      const botMsg: ChatMessage = {
-        id: 'msg-bot-' + Date.now(),
-        sender: 'suspect',
-        suspectId: selectedSuspect,
-        text: replyText,
-        timestamp: getCurrentTime(),
-        stressDelta: stressIncrease,
-        isContradiction
+    } catch {
+      setStreamingReply('');
+      setApiCheckStatus('error');
+      setApiCheckMessage('AI 연결에 실패해 로컬 엔진으로 응답했습니다.');
+      fallbackNotice = {
+        id: `msg-fallback-${Date.now()}`,
+        sender: 'system',
+        text: '⚠️ AI 서버에 연결할 수 없어 내장 추리 엔진으로 답변했습니다.',
+        timestamp: getCurrentTime()
       };
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    }
 
-      setChatLogs((prev) => [...prev, botMsg]);
-      setIsTyping(false);
-      setSelectedEvidence(null);
+    setHeartRates((prev) => ({
+      ...prev,
+      [suspectIdAtSend]: Math.min(185, prev[suspectIdAtSend] + localResponse.stressDelta)
+    }));
 
-      if (newTurn === 0) {
-        setIsAccuseModalOpen(true);
-      }
-    }, 600);
+    const botMsg: ChatMessage = {
+      id: 'msg-bot-' + Date.now(),
+      sender: 'suspect',
+      suspectId: suspectIdAtSend,
+      text: replyText || localResponse.text,
+      timestamp: getCurrentTime(),
+      stressDelta: localResponse.stressDelta,
+      isContradiction: localResponse.isContradiction
+    };
+
+    setChatLogs((prev) => [...prev, ...(fallbackNotice ? [fallbackNotice] : []), botMsg]);
+    setIsTyping(false);
+    setTypingSuspectId(null);
+    setStreamingReply('');
+    setSelectedEvidence(null);
+
+    if (newTurn === 0) setIsAccuseModalOpen(true);
+  };
+
+  const handleCheckLlmConnection = async () => {
+    setApiCheckStatus('checking');
+    setApiCheckMessage('AI 서버 연결을 확인하고 있습니다...');
+    try {
+      await checkLlmConnection(apiEndpoint);
+      setApiCheckStatus('connected');
+      setApiCheckMessage('AI 서버와 모델 설정이 확인되었습니다.');
+    } catch (error) {
+      setApiCheckStatus('error');
+      setApiCheckMessage(error instanceof Error ? error.message : 'AI 서버에 연결하지 못했습니다.');
+    }
+  };
+
+  const handleSaveLlmSettings = () => {
+    const normalizedEndpoint = apiEndpoint.trim() || getDefaultLlmEndpoint();
+    setApiEndpoint(normalizedEndpoint);
+    try {
+      window.localStorage.setItem('code-red-llm-endpoint', normalizedEndpoint);
+      window.localStorage.setItem('code-red-ai-mode', String(isAiMode));
+    } catch {
+      // Private browsing may block local storage; settings still apply for this session.
+    }
+    setIsAiSettingsOpen(false);
   };
 
   // 최종 기소 판정
@@ -334,6 +457,7 @@ export default function CodeRedGame() {
 
   const currentSuspect = SUSPECTS[selectedSuspect];
   const currentHeartRate = heartRates[selectedSuspect];
+  const activeTypingSuspect = SUSPECTS[typingSuspectId ?? selectedSuspect];
 
   const getBpmBadge = (bpm: number) => {
     if (bpm >= 130) return { bg: 'bg-red-500/20 text-red-400 border-red-500/40', label: '🔥 당황' };
@@ -373,6 +497,19 @@ export default function CodeRedGame() {
             </div>
 
             <button
+              type="button"
+              onClick={() => setIsAiSettingsOpen(true)}
+              aria-label="AI 연결 설정"
+              className={`px-2 py-1 rounded-md border text-[10px] font-bold transition-all ${
+                isAiMode
+                  ? 'bg-emerald-950/70 border-emerald-700 text-emerald-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+              }`}
+            >
+              ⚙️ AI
+            </button>
+
+            <button
               onClick={() => setIsAccuseModalOpen(true)}
               className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white shadow-md shadow-red-600/30 transition-all flex items-center gap-1 active:scale-95 shrink-0"
             >
@@ -395,11 +532,12 @@ export default function CodeRedGame() {
                 <button
                   key={id}
                   onClick={() => setSelectedSuspect(id)}
+                  disabled={isTyping}
                   className={`flex items-center justify-between p-1.5 rounded-lg border transition-all text-left ${
                     isSelected
                       ? 'bg-slate-800 border-emerald-500 shadow-sm shadow-emerald-500/20'
                       : 'bg-slate-950/60 border-slate-800/80 opacity-70 hover:opacity-100'
-                  }`}
+                  } disabled:opacity-50`}
                 >
                   <div className="flex items-center gap-1.5 overflow-hidden">
                     <span className="text-lg leading-none shrink-0">{s.avatar}</span>
@@ -499,8 +637,19 @@ export default function CodeRedGame() {
           })}
 
           {isTyping && (
-            <div className="flex items-center gap-2 text-[11px] text-slate-500 italic px-2">
-              <span className="animate-pulse">{currentSuspect.name}님이 답변을 망설이고 있습니다...</span>
+            <div className="flex gap-2 items-end">
+              <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-sm shrink-0 mb-1">
+                {activeTypingSuspect.avatar}
+              </div>
+              <div className="flex flex-col items-start max-w-[78%]">
+                <span className="text-[10px] text-slate-400 font-semibold mb-0.5 ml-1">
+                  {activeTypingSuspect.name}
+                </span>
+                <div className="p-2.5 rounded-2xl rounded-bl-none bg-slate-900 text-slate-200 border border-slate-800 text-xs leading-relaxed whitespace-pre-wrap break-words">
+                  {streamingReply || <span className="animate-pulse text-slate-500 italic">답변을 망설이고 있습니다...</span>}
+                  {streamingReply && <span className="ml-0.5 animate-pulse text-emerald-300">▍</span>}
+                </div>
+              </div>
             </div>
           )}
           <div ref={chatBottomRef} />
@@ -518,11 +667,12 @@ export default function CodeRedGame() {
                 <button
                   key={ev.id}
                   onClick={() => setSelectedEvidence(isChosen ? null : ev.id)}
+                  disabled={isTyping}
                   className={`text-[10px] px-2 py-0.5 rounded-full border flex items-center gap-1 shrink-0 transition-all ${
                     isChosen
                       ? 'bg-emerald-500 text-slate-950 font-bold border-emerald-400 shadow-sm'
                       : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
-                  }`}
+                  } disabled:opacity-50`}
                 >
                   <span>{ev.icon}</span>
                   <span>{ev.name.split(' ')[0]}</span>
@@ -578,6 +728,100 @@ export default function CodeRedGame() {
             </form>
           </div>
         </div>
+
+        {/* AI API 설정 */}
+        {isAiSettingsOpen && (
+          <div className="absolute inset-0 z-[70] bg-black/85 backdrop-blur-sm flex items-end sm:items-center justify-center p-3">
+            <div className="w-full bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <div>
+                  <h3 className="text-sm font-bold text-white">AI 심문 연결</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">OpenAI Responses API 스트리밍</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAiSettingsOpen(false)}
+                  className="text-slate-400 hover:text-white text-xs px-1"
+                  aria-label="설정 닫기"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="py-3 space-y-3">
+                <label className="flex items-start gap-2.5 rounded-xl border border-slate-800 bg-slate-950/70 p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isAiMode}
+                    onChange={(event) => setIsAiMode(event.target.checked)}
+                    className="mt-0.5 accent-emerald-500"
+                  />
+                  <span>
+                    <span className="block text-xs font-bold text-slate-100">실제 AI 응답 사용</span>
+                    <span className="block text-[10px] text-slate-500 mt-0.5">끄면 키나 네트워크 없이 로컬 추리 엔진으로 플레이합니다.</span>
+                  </span>
+                </label>
+
+                <div>
+                  <label htmlFor="llm-endpoint" className="block text-[11px] font-bold text-slate-300 mb-1.5">
+                    AI 서버 주소
+                  </label>
+                  <input
+                    id="llm-endpoint"
+                    type="url"
+                    value={apiEndpoint}
+                    onChange={(event) => setApiEndpoint(event.target.value)}
+                    placeholder="https://내-서버.vercel.app/api/interrogate"
+                    className="w-full bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 outline-none"
+                    autoComplete="url"
+                    spellCheck={false}
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1.5 leading-relaxed">
+                    기본값은 <code className="text-slate-400">/api/interrogate</code>입니다. GitHub Pages에서 AI 모드를 쓰려면 별도 배포한 서버 주소를 입력하세요.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 rounded-lg bg-slate-950 px-3 py-2 border border-slate-800">
+                  <span className={`text-[10px] leading-relaxed ${apiCheckStatus === 'connected' ? 'text-emerald-300' : apiCheckStatus === 'error' ? 'text-amber-300' : 'text-slate-400'}`}>
+                    {apiCheckMessage}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCheckLlmConnection}
+                    disabled={apiCheckStatus === 'checking'}
+                    className="shrink-0 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    {apiCheckStatus === 'checking' ? '확인 중…' : '연결 확인'}
+                  </button>
+                </div>
+
+                <p className="text-[10px] text-amber-200/80 leading-relaxed">
+                  보안을 위해 API 키는 이 브라우저에 입력하거나 저장하지 않습니다. 서버 환경변수 <code>OPENAI_API_KEY</code>에 설정해야 합니다. AI 서버에 연결할 수 없으면 로컬 엔진으로 계속 플레이합니다.
+                </p>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  AI 모드에서는 질문과 최근 심문 일부가 설정한 서버로 전송됩니다. 심박수 상승과 모순 판정은 현재 로컬 증거 규칙으로 처리합니다.
+                </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAiSettingsOpen(false)}
+                  className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800"
+                >
+                  닫기
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveLlmSettings}
+                  className="px-4 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white"
+                >
+                  설정 저장
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 6. 모바일 최적화 진범 기소 모달 */}
         {isAccuseModalOpen && (
